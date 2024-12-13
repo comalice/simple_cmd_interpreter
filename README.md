@@ -1,6 +1,6 @@
 # Installation
 
-`pip install simple-cmd-parser`
+TODO `pip install simple-cmd-parser`
 
 # Example Usage
 
