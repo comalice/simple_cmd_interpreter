@@ -2,33 +2,25 @@
 from typing import Any, Dict
 
 
-class InterpreterException:
-    def __init__(self, message: str):
-        self.message = message
-
-    def __repr__(self):
-        return self.message
-
-    def __str__(self):
-        return self.__repr__()
-
+class InterpreterException(Exception):
+    pass
 
 class Interpreter:
     """Given a parser output and a map of values to Callables, eval the parser output."""
+    IGNORE = ["summary"]
 
-    def __init__(self, _map: Dict):
+    def __init__(self, _map: Dict, prepend_help=""):
         self._map = _map
+        self.prepend_help = prepend_help
 
     def eval(self, command: str):
         cmd_list = command.strip().split()
 
-        _out = self._eval(cmd_list, self._map)
-
-        # Handle interpreter exceptions.
-        if type(_out[-1]) is InterpreterException:
-            return f"{str(_out[-1])}\n{'-' * 80}\nUsage: {self._render_help([], self._map)}"
-
-        return _out
+        try:
+            return self._eval(cmd_list, self._map)
+        except InterpreterException as e:
+            # Handle interpreter exceptions.
+            return f"{str(e)}\n{'-' * 80}\n" + self.prepend_help + f"{self._render_help([], self._map)}"
 
     def _eval(self, cmd_list, _map: Any):
         #
@@ -51,13 +43,13 @@ class Interpreter:
                 return [_out]
 
             except TypeError as e:
-                return [InterpreterException(f"Command failed with params `{','.join(cmd_list)}` and "
-                                             f"with exception `{e}`\n\n")]
+                raise InterpreterException(f"Command failed with params `{','.join(cmd_list)}` and "
+                                             f"with exception `{e}`\n\n")
 
         # Check for "help" and render help strings for each method.
         if cmd_list and cmd_list[-1] == "help":
             # Strip off 'help' and evaluate docstrings.
-            return self._render_help(cmd_list[:-1], _map)
+            return self.prepend_help + self._render_help(cmd_list[:-1], _map)
 
         # We are out of params in cmd_list, but our map is not callable. In this case we use the "default" field.
         if not cmd_list and not callable(_map):
@@ -69,8 +61,9 @@ class Interpreter:
         # Dictionary - index in, call recursively.
         if type(_map) is dict:
             if cmd_list[0] not in _map:
-                return [*cmd_list,
-                        InterpreterException(f"Command '{cmd_list[0]}' not found in {[x for x, _ in _map.items()]}.")]
+                raise InterpreterException(f"Command '{cmd_list[0]}' not found in {[x for x, _ in _map.items()]}.")
+                # return [*cmd_list,
+                #         InterpreterException(f"Command '{cmd_list[0]}' not found in {[x for x, _ in _map.items()]}.")]
 
             # Strip first value off cmd_list, call recursively.
             _out = self._eval(cmd_list[1:], _map[cmd_list[0]])
@@ -96,30 +89,38 @@ class Interpreter:
             # TODO sort out why inherited method docstrings are not inherited
             # See https://docs.python.org/3/library/inspect.html#inspect.getdoc
             if inspect.getdoc(_map):
-                _c += ": " + inspect.getdoc(_map)
+                doc_string = inspect.getdoc(_map).splitlines()
+                if len(doc_string) > 1:
+                    # _c += ": " + "".join(y for x in inspect.getdoc(_map).splitlines() for y in (x, " " * indent + x + "\n"))
+                    _c += ": " + "".join([elem for x in inspect.getdoc(_map).splitlines() for elem in (x, "\n" + " " * indent)][:-1])
+                else:
+                    _c += ": " + inspect.getdoc(_map)
 
-            return _c + "\n"
+            return _c
 
-        #
-        # Recursive Case
-        #
-        # If we have commands remaining, we aren't deep enough into the command map.
-        if cmd_list:
-            try:
-                result = self._render_help(cmd_list[1:], _map[cmd_list[0]], indent=indent + 2)
-                if result:
-                    return cmd_list[0] + " " + result
+        else:
+            # If we have commands, drill in.
+            if cmd_list:
+                try:
+                    result = self._render_help(cmd_list[1:], _map[cmd_list[0]], indent=indent + 2)
+                    if result:
+                        # Try to grab a command summary.
+                        summary = ""
+                        if _map[cmd_list[0]].get("summary"):
+                            summary = _map[cmd_list[0]]["summary"] + "\n"
+                        return cmd_list[0] + ": " + summary + result
 
-                return cmd_list[0]
-            except KeyError as e:
-                return InterpreterException(f"{cmd_list[0]} not found in {[x for x, _ in _map.items()]}.")
+                    return cmd_list[0]
+                except KeyError as e:
+                    raise InterpreterException(f"{cmd_list[0]} not found in {[x for x, _ in _map.items() if x not in Interpreter.IGNORE]}.")
 
-        if not cmd_list and _map:
-            _out = ""
-            for k, v in _map.items():
-                _out += "\n" + " " * indent + k + self._render_help([], v, indent=indent + 2)
+            # No commands, render the whole tier of commands.
+            else:
+                _out = ""
+                for k, v in [(l, m) for l, m in _map.items() if l not in Interpreter.IGNORE]:
+                    _out += "\n" + " " * indent + k + self._render_help([], v, indent=indent + 2)
 
-            return _out
+                return _out
 
         print("ERROR: we fell out the bottom")
 
